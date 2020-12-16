@@ -3,6 +3,13 @@
 Created on Sat Dec 12 09:43:56 2020
 
 @author: noahn
+
+Run in cmd/conda cmd
+
+python -m spacy download en_core_web_lg
+
+
+
 """
 
 import spacy, itertools, random
@@ -54,15 +61,22 @@ def rebuild_clue_words():
 def save_sim_matrices(seed=5):
     # normally bot should do this during init
     # can be much improved
+  
+    SUBSET = False
       
+    nlp = spacy.load('en_core_web_lg')
+    
     with open('cache/card_words.txt') as f:
        all_card_words = [w.replace('\n', '') for w in f.readlines()]
        
     with open('cache/clue_words.txt') as f:
         all_clue_words = [w.replace('\n', '') for w in f.readlines()]
     
-    random.seed(seed)
-    card_words = random.sample(all_card_words, 25)
+    if SUBSET:
+        random.seed(seed)
+        card_words = random.sample(all_card_words, 25)
+    else:
+        card_words = all_card_words
     
     
     ##########################################################################
@@ -85,8 +99,10 @@ def save_sim_matrices(seed=5):
     ## Pairwise similarity between each card and possible clue              ##
     ##########################################################################
     
-    
-    valid_clue_words = [c for c in all_clue_words if c not in card_words]
+    if SUBSET:
+        valid_clue_words = [c for c in all_clue_words if c not in card_words]
+    else:
+        valid_clue_words = all_clue_words
     
     card_tokens = [nlp(x) for x in card_words]
     clue_tokens = [nlp(x) for x in valid_clue_words]  
@@ -94,10 +110,12 @@ def save_sim_matrices(seed=5):
     card_clue_sim_matrix = [[w1.similarity(w2) for w1 in card_tokens] for w2 in clue_tokens] #why is this giving me an empty vector warning?
 
     card_clue_sim_df = pd.DataFrame(index=valid_clue_words, columns=card_words, data=card_clue_sim_matrix).transpose()
-    card_clue_sim_df = card_clue_sim_df.loc[:, card_clue_sim_df.sum() > 0]
+    card_clue_sim_df = card_clue_sim_df.loc[:, card_clue_sim_df.sum() > 0] # 144/18543 words missing
 
-    
-    card_clue_sim_df.to_csv('cache/card_to_clue_sims_seed{0}.csv'.format(seed))
+    if SUBSET:
+        card_clue_sim_df.to_csv('cache/card_to_clue_sims_seed{0}.csv'.format(seed))
+    else:
+        card_clue_sim_df.to_csv('cache/card_to_clue_sims_all.csv')
 
 
 #TODO: rebuild clue list 

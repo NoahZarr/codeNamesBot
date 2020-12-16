@@ -6,11 +6,9 @@ Created on Sat Dec 12 09:30:41 2020
 """
 
 import random
-from enum import Enum, auto
+from enum import Enum
 import pandas as pd
 import itertools
-import spacy 
-from collections import Counter 
 import time
 
 pd.set_option('display.max_rows', 500)
@@ -25,12 +23,16 @@ class Team(Enum):
     red = -1
     neutral = 0
     assassin = 9
+    
+    def __str__(self):
+        return self.name.upper()
+    
 
 class Codenames:
     
-    def __init__(self, first_team = Team.blue, player_team = Team.blue):
+    def __init__(self, first_team = Team.blue, player_team = Team.blue, seed=None):
         
-        self.seed = 7
+        self.seed = seed
         self.current_turn_team = first_team
         
         self.player_team = player_team
@@ -59,6 +61,11 @@ class Codenames:
                 for guess in range(1, max_guesses+1):
                     print('Guess {0}/{1}'.format(guess, max_guesses))
                     guess = self.prompt_and_validate_guess(clue)
+                    
+                    if guess is None:
+                        print('{0} team passes'.format(self.current_turn_team))
+                        break
+                    
                     revealed_card = self.touch(guess, return_card = True)
                     
                     
@@ -83,8 +90,11 @@ class Codenames:
     def prompt_and_validate_guess(self, clue):
         valid_guess_received = False
         while not valid_guess_received:
+            print('Enter a card for the below clue.\n Enter _ to pass, $ to see the board or ! to quit.')
             guess = input(clue)
-            if guess in self.board.get_words(revealed=False):
+            if guess == '_':
+                return None
+            elif guess in self.board.get_words(revealed=False):
                 valid_guess_received=True
             else:
                 print('ERROR: {0} is not a valid guess, please enter a word on the board.'.format(guess))
@@ -97,6 +107,7 @@ class Codenames:
     
     def change_team(self):
         self.current_turn_team = Team(self.current_turn_team.value * -1)
+        time.sleep(2)
         
         
     def show(self, reveal_teams=False):
@@ -109,7 +120,7 @@ class Codenames:
             team = self.player_team
         revealed_card = self.board.touch(word)[0] #TODO: right now board.touch() returns list, change
         
-        print(revealed_card) #make this prettier 
+        #print(revealed_card) #make this prettier 
         
         #should this stuff be handled here? 
         if revealed_card.team in (Team.red, Team.blue):
@@ -149,7 +160,7 @@ class Codenames:
   
 class Board:
     
-    def __init__(self, seed=None, first_team=Team.blue): 
+    def __init__(self, first_team=Team.blue, seed=None): 
         
         
         with open('cache/card_words.txt') as f: #TODO: move to Codenames
@@ -158,7 +169,7 @@ class Board:
         if seed is not None:
             random.seed(seed)
         
-        selected_card_words = random.sample(all_card_words, 25) #this relies on passed seed so we can use cached similarities
+        selected_card_words = random.sample(all_card_words, 25) 
         
         team_assignment_seed = str(int(time.time()))[-2:]
        
@@ -239,6 +250,9 @@ class Card:
         self.word = word
         self.team = team
         self.revealed = False
+    
+    def __str(self):
+        return('CARD: {0} {1}'.format(self.word, self.team.name.upper()))
         
         
   
@@ -254,11 +268,15 @@ class Bot:
         self.team = team 
         self.board = board #looking only, no touching.
         self.owner = owner #Codenames instance
-        self.seed = self.owner.seed if self.owner is not None else 5
+        self.seed = self.owner.seed if self.owner is not None else None
         
-        self.board_pw_sims = pd.read_csv('cache/card_words_pairwise_sims_seed{0}.csv'.format(self.seed))
+        if self.seed is not None: #this block can be removed later; pass this in from codenames from a yaml?
+            sim_path = 'cache/card_to_clue_sims_seed{0}.csv'.format(self.seed)
+        else:
+            sim_path = 'cache/card_to_clue_sims_all.csv'
+            
         
-        self.board_clue_sims = pd.read_csv('cache/card_to_clue_sims_seed{0}.csv'.format(self.seed), index_col=0)
+        self.board_clue_sims = pd.read_csv(sim_path, index_col=0).loc[self.board.get_words(), :]
         self.board_clue_sims.index.name = 'board_word'
         
         self.clue_safety = self.set_clue_safety(); #boolean series with same index as board_clue_sims
@@ -305,13 +323,7 @@ class Bot:
              
         self.clue_safety = ~(danger_df.any(axis=1))
         
-      
- 
-    def get_closest_target_pair(self): #oh i forgot, this isn't actually that useful 
-        valid_targets = self.get_valid_targets()
-        return (self.board_pw_sims.query('w1 in @valid_targets and w2 in @valid_targets')
-                .sort_values('sim', ascending=False).head(1)) #hm... output doesnt look great 
-    
+          
     def pick_best_clue_for_targets(self, targets, method='sum'):
         #intended to run in apply, hence the weird return 
   
@@ -355,10 +367,12 @@ class Bot:
         
         relative_points = current_scores[self.team] - current_scores[other_team]
         num_points_to_win = self.owner.max_scores[self.team] - current_scores[self.team]
+        num_enemy_points_to_win = self.owner.max_scores[other_team] - current_scores[other_team]
+        
         
         if num_points_to_win <= 2:
             clue = self.pick_clue(ntargets = num_points_to_win)
-        elif relative_points <= -3:
+        elif relative_points <= -3 or num_enemy_points_to_win <= 2:
             clue = self.pick_clue(ntargets = max(abs(relative_points), 4))
         else:
             clue = self.pick_clue(ntargets = 2)
@@ -391,9 +405,7 @@ class Clue:
         
 if __name__ == "__main__":
 
-    
-    
-    cn = Codenames()
+    cn = Codenames(seed = str(int(time.time()))[-4:])  
     
     b = cn.bot
     
