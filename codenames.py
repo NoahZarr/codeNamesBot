@@ -58,85 +58,95 @@ class Codenames:
                 clue = self.bot.play(return_clue=True)
                 max_guesses = len(clue.targets) + 1
                 
-                for guess in range(1, max_guesses+1):
-                    print('Guess {0}/{1}'.format(guess, max_guesses))
-                    guess = self.prompt_and_validate_guess(clue)
+                for guess_num in range(1, max_guesses+1):
+                    guess = self.prompt_and_validate_response(clue, guess_num, max_guesses)
                     
-                    if guess is None:
+                    if guess == '_':
                         print('{0} team passes'.format(self.current_turn_team))
                         break
-                    
+
                     revealed_card = self.touch(guess, return_card = True)
-                    
-                    
-                    result_string = 'RESULT: "{0}" was a {1} card!'.format(guess, revealed_card.team.name.upper())
-                    
-                    if revealed_card.team in (Team.red, Team.blue):
-                        result_string += ' +1 point {0} team.'.format(revealed_card.team.name)
-                       
+                              
                     if revealed_card.team != self.player_team:
-                        result_string += ' Turn over.'
-                        print(result_string)
                         break
-                    else:
-                        print(result_string)
+            
                         
             else:
                 self.simulate_turn()
                      
             self.change_team()
-
-    
-    def prompt_and_validate_guess(self, clue):
-        valid_guess_received = False
-        while not valid_guess_received:
-            print('Enter a card for the below clue.\n Enter _ to pass, $ to see the board or ! to quit.')
-            guess = input(clue)
-            if guess == '_':
-                return None
-            elif guess in self.board.get_words(revealed=False):
-                valid_guess_received=True
+       
+            
+         
+    def simulate_turn(self, team=Team.red, max_num_to_touch=2):
+        valid_words = self.board.get_words(team=team, revealed=False)
+        num_to_touch = min(max_num_to_touch, len(valid_words))
+        
+        for word_to_touch in random.sample(valid_words, num_to_touch):      
+            self.touch(word_to_touch, team=self.other_team)
+            
+     
+    def prompt_and_validate_response(self, clue, guess_num, max_guesses):
+       
+        valid_response = None
+        while valid_response is None:
+            print('Guess {0}/{1}'.format(guess_num, max_guesses))
+            print('Enter a card for the below clue.\nEnter _ to pass or $ to display the board again.')
+            response = input(clue)
+            #response = prompt_response(clue)
+            
+            if response == '$':
+                self.show()            
+            elif response in self.board.get_words(revealed=False) + ['_']:
+                valid_response = response
             else:
-                print('ERROR: {0} is not a valid guess, please enter a word on the board.'.format(guess))
-                
-        return guess
-    
-    def request_clue(self, clue):
-        pass
+                print(f'''ERROR: {response} is not a valid guess, please enter a word on the board.
+                Enter _ to pass, $ to see the board or ! to quit''')     
+        return valid_response
+      
+      
+    def touch(self, word, team=None, return_card=False):
+          if team == None: team = self.player_team
+          revealed_card = self.board.touch(word) 
+          
+          self.print_guess_result(revealed_card, current_team=team)
+          
+          if revealed_card.team in (Team.red, Team.blue):
+              self.scores[revealed_card.team] += 1 
+              self.check_game_end()
+          
+          if return_card:
+              return revealed_card 
         
-    
-    def change_team(self):
+        
+    def print_guess_result(self, revealed_card, current_team = None, sleep_dur = 1):
+        if current_team is None: current_team = self.player_team 
+        
+        result_string = 'RESULT: "{0}" was a {1} card!'.format(revealed_card.word, revealed_card.team.name.upper())
+        
+        if revealed_card.team in (Team.red, Team.blue):
+            result_string += ' +1 point {0} team.'.format(revealed_card.team.name)
+           
+        if revealed_card.team != current_team:
+            result_string += ' Turn over.'    
+            print(result_string)
+        else:
+            print(result_string)       
+            
+        time.sleep(sleep_dur)
+ 
+
+    def change_team(self, sleep_dur=2):
         self.current_turn_team = Team(self.current_turn_team.value * -1)
-        time.sleep(2)
+        time.sleep(sleep_dur)
         
+  
         
     def show(self, reveal_teams=False):
         self.board.show(reveal_teams=reveal_teams)
         self.print_score()
-        
-        
-    def touch(self, word, team=None, return_card=False):
-        if team == None:
-            team = self.player_team
-        revealed_card = self.board.touch(word)[0] #TODO: right now board.touch() returns list, change
-        
-        #print(revealed_card) #make this prettier 
-        
-        #should this stuff be handled here? 
-        if revealed_card.team in (Team.red, Team.blue):
-            self.scores[revealed_card.team] += 1 
-            self.check_game_end()
-        
-        if return_card:
-            return revealed_card 
-        
-        
-    def simulate_turn(self, team=Team.red, max_num_to_touch=2):
-        valid_targets = self.board.get_words(team=team, revealed=False)
-        num_to_touch = min(max_num_to_touch, len(valid_targets))
-        
-        for word_to_touch in random.sample(valid_targets, num_to_touch):
-            self.touch(word_to_touch, team=self.other_team)
+    
+      
         
     def check_game_end(self):
         if self.team_hit_assasin is not None:
@@ -210,23 +220,14 @@ class Board:
         print('\n' + '\n'.join(all_grid_rows))
     
         
-    def touch(self, words, reveal=True):
-        #TODO: make this singular again?
-        
-        if isinstance(words, str):
-            words = [words]
-            
-        invalid_words = [w for w in words if w not in self.get_words(revealed=False)]
-        if len(invalid_words) > 0:
-            raise ValueError('The following targets are not valid, please try again: {0}'.format(invalid_words))
-        
-        results = []
-        for word in words:   
-            card = [c for c in self.cards if c.word == word and c.revealed == False][0] #can i access cards by name?
-            card.revealed = reveal
-            results.append(card)
-                
-        return results
+    def touch(self, word):
+                    
+        if word not in self.get_words(revealed=False):
+            raise ValueError('The following target is invalid, please try again: {0}'.format(word))
+       
+        card  = self.get_card_by_name(word)
+        card.revealed = True           
+        return card
      
     def get_words(self, team=None, revealed=None):
         relevant_cards = [card for card in self.cards]
@@ -238,6 +239,13 @@ class Board:
             relevant_cards = [card for card in relevant_cards if card.revealed == revealed]
                     
         return [card.word for card in relevant_cards]
+    
+    def get_card_by_name(self, word):
+        for card in self.cards:
+            if card.word == word:
+                return card
+        else:
+            raise ValueError('{0} is not a card on the board'.format(word))
   
             
         
@@ -251,7 +259,7 @@ class Card:
         self.team = team
         self.revealed = False
     
-    def __str(self):
+    def __str__(self):
         return('CARD: {0} {1}'.format(self.word, self.team.name.upper()))
         
         
@@ -268,13 +276,9 @@ class Bot:
         self.team = team 
         self.board = board #looking only, no touching.
         self.owner = owner #Codenames instance
-        self.seed = self.owner.seed if self.owner is not None else None
         
-        if self.seed is not None: #this block can be removed later; pass this in from codenames from a yaml?
-            sim_path = 'cache/card_to_clue_sims_seed{0}.csv'.format(self.seed)
-        else:
-            sim_path = 'cache/card_to_clue_sims_all.csv'
-            
+      
+        sim_path = 'cache/card_to_clue_sims_all.csv'
         
         self.board_clue_sims = pd.read_csv(sim_path, index_col=0).loc[self.board.get_words(), :]
         self.board_clue_sims.index.name = 'board_word'
@@ -373,7 +377,7 @@ class Bot:
         if num_points_to_win <= 2:
             clue = self.pick_clue(ntargets = num_points_to_win)
         elif relative_points <= -3 or num_enemy_points_to_win <= 2:
-            clue = self.pick_clue(ntargets = max(abs(relative_points), 4))
+            clue = self.pick_clue(ntargets = min(abs(relative_points), 4))
         else:
             clue = self.pick_clue(ntargets = 2)
             
@@ -393,7 +397,8 @@ class Clue:
         self.targets = targets
         self.score = score
         self.target_sims = target_sims
-        self.method = method
+        self.method = method 
+        
         
     def __repr__(self):
         return str(self.__dict__)
