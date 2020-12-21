@@ -8,40 +8,67 @@ Run in cmd/conda cmd
 
 python -m spacy download en_core_web_lg
 
-
-
 """
 
-import spacy, itertools, random
+import spacy
 import pandas as pd
-import numpy as np
+import os
+import yaml
 
-RAW_RESOURCES_DIR = 'raw_resources'
-CACHE_DIR = 'cache'
+def create_directories():
+    settings = yaml.safe_load(open('settings.yaml', 'r'))
+    home_dir = settings['paths']['home']
+    home_dir_contents = os.listdir(home_dir)
+    
+    if 'codenames.py' in home_dir_contents:
+        os.chdir(home_dir)
+    else:
+        raise ValueError("Home directory configured incorrectly. " +
+                         "Can't find codenames.py in {0}""".format(home_dir))
+    
+    paths_to_create = [p for p in list(settings['paths'].values()) 
+                       if p != home_dir and p not in home_dir_contents]
+    for path in paths_to_create:
+        os.mkdir(path)
+
+    
 
 def rebuild_card_words():
-
-    with open(RAW_RESOURCES_DIR + '/codeNamesWords.txt') as f:
+    settings = yaml.safe_load(open('settings.yaml', 'r'))
+    raw_resources_path = settings['paths']['raw_resources']
+    cache_path = settings['paths']['cache']
+    
+    with open(raw_resources_path + '/codeNamesWords.txt') as f:
         codenames_words = [w.replace('\n', '') for w in f.readlines()]
         
-    
-    with open(RAW_RESOURCES_DIR + '/linuxWords.txt') as f:
+    with open(raw_resources_path + '/linuxWords.txt') as f:
         linux_words = [w.replace('\n', '') for w in f.readlines()]
         
     words = [w for w in linux_words if w.upper() in codenames_words] #use linux words to get proper capitalization
     
-    with open(CACHE_DIR + '/card_words.txt', 'w') as f:
+    #create cache folder if it doesnt exist
+    with open(cache_path + '/card_words.txt', 'w') as f:
         f.write('\n'.join(words))
         
         
-def rebuild_clue_words():
-    with open(RAW_RESOURCES_DIR + '/linuxWords.txt') as f:
+def rebuild_clue_words(nlp=None):
+    
+    settings = yaml.safe_load(open('settings.yaml', 'r'))
+    raw_resources_path = settings['paths']['raw_resources']
+    cache_path = settings['paths']['cache']
+    
+    print('Rebuilding list of possible clues.')
+    
+    if nlp is None: nlp = spacy.load('en_core_web_lg')
+    
+    
+    with open(raw_resources_path + '/linuxWords.txt') as f:
         linux_words = [w.replace('\n', '') for w in f.readlines()]
     
     doc = nlp(' '.join(linux_words))
     
      # https://spacy.io/api/annotation  
-    valid_pos = ['NOUN', 'VERB', 'ADJ']
+    valid_pos = ['NOUN', 'VERB', 'ADJ', 'PROPN'] #not clear whether to include PROPN
     invalid_tags = ['NNS', 'NNPS']
     
     
@@ -52,19 +79,19 @@ def rebuild_clue_words():
     
     good_words = list(set(good_words))
     
-    with open(CACHE_DIR + '/clue_words.txt', 'w') as f:
+    with open(cache_path + '/clue_words.txt', 'w') as f:
         f.write('\n'.join(good_words))
 
+    print('Completed list of possible clues.')
+    
+    
+def rebuild_sim_matrix(nlp=None):
+    
+    print('Rebuilding similarity matrix.')
 
+    #create dataframe with pairwise similarity between each card and possible clue
     
-    
-def save_sim_matrices(seed=5):
-    # normally bot should do this during init
-    # can be much improved
-  
-    SUBSET = False
-      
-    nlp = spacy.load('en_core_web_lg')
+    if nlp is None: nlp = spacy.load('en_core_web_lg')
     
     with open('cache/card_words.txt') as f:
        all_card_words = [w.replace('\n', '') for w in f.readlines()]
@@ -72,91 +99,36 @@ def save_sim_matrices(seed=5):
     with open('cache/clue_words.txt') as f:
         all_clue_words = [w.replace('\n', '') for w in f.readlines()]
     
-    if SUBSET:
-        random.seed(seed)
-        card_words = random.sample(all_card_words, 25)
-    else:
-        card_words = all_card_words
     
+    card_tokens = [nlp(x) for x in all_card_words]
+    clue_tokens = [nlp(x) for x in all_clue_words]  
     
-    ##########################################################################
-    ## Pairwise similarity between each of the cards - possibly not needed? ##
-    ##########################################################################
-    pairs = list(itertools.combinations(card_words, 2))
-    pair_sims = pd.DataFrame({'w1': [p[0] for p in pairs], 'w2': [p[1] for p in pairs], 'sim': np.nan})
-    
-    for i, p in pair_sims.iterrows():  
-       pair_sims.loc[i, 'sim'] = nlp(p['w1']).similarity(nlp(p['w2']))
+    card_clue_sim_matrix = [[w1.similarity(w2) for w1 in card_tokens] for w2 in clue_tokens] 
 
-    df_upper = pair_sims.pivot_table(index = 'w1', columns = 'w2', values = 'sim')
-    df_lower = pair_sims.pivot_table(index = 'w2', columns = 'w1', values = 'sim')
-    pair_sim_matrix = df_upper.combine_first(df_lower)
-
-    pair_sim_matrix.to_csv('cache/card_words_pairwise_sims_seed{0}.csv'.format(seed), index=False)
+    card_clue_sim_df = pd.DataFrame(index=all_clue_words, columns=all_card_words,
+                                    data=card_clue_sim_matrix).transpose()
     
-    
-    ##########################################################################
-    ## Pairwise similarity between each card and possible clue              ##
-    ##########################################################################
-    
-    if SUBSET:
-        valid_clue_words = [c for c in all_clue_words if c not in card_words]
-    else:
-        valid_clue_words = all_clue_words
-    
-    card_tokens = [nlp(x) for x in card_words]
-    clue_tokens = [nlp(x) for x in valid_clue_words]  
-    
-    card_clue_sim_matrix = [[w1.similarity(w2) for w1 in card_tokens] for w2 in clue_tokens] #why is this giving me an empty vector warning?
-
-    card_clue_sim_df = pd.DataFrame(index=valid_clue_words, columns=card_words, data=card_clue_sim_matrix).transpose()
     card_clue_sim_df = card_clue_sim_df.loc[:, card_clue_sim_df.sum() > 0] # 144/18543 words missing
 
-    if SUBSET:
-        card_clue_sim_df.to_csv('cache/card_to_clue_sims_seed{0}.csv'.format(seed))
-    else:
-        card_clue_sim_df.to_csv('cache/card_to_clue_sims_all.csv')
+    card_clue_sim_df.to_csv('cache/card_to_clue_sims_all.csv')
+    print('Completed similarity matrix.')
 
 
-#TODO: rebuild clue list 
-
-nlp = spacy.load('en_core_web_lg')
-doc = nlp(' '.join(linux_words))
-
-for token in doc:
-    print(token.text, token.pos_)
+def rebuild_all():
+    nlp = spacy.load('en_core_web_lg')
     
-
-bad_words = [token.text for token in doc if token.pos_ not in usable_pos_tags]
-
-
-with open(CACHE_DIR + '/clue_words.txt', 'w') as f:
-        f.write('\n'.join(good_words))
-        
-        
-if False:
-
-    pairs = list(itertools.combinations(words, 2))
+    create_directories()
+    rebuild_card_words()
+    rebuild_clue_words(nlp=nlp)
+    rebuild_sim_matrix(nlp=nlp)
     
-    pdf = pd.DataFrame({'w1': [p[0] for p in pairs], 'w2': [p[1] for p in pairs], 'sim': np.nan})
+if __name__ == '__main__':
+    rebuild_all()
     
-    #pdf = pdf.head().copy()
     
-    for i, p in pdf.iterrows():
-        #getting sims and saving them separately as creating the df directly may have
-        #overheated cpu?
-        pdf.loc[i, 'sim'] = nlp(p['w1']).similarity(nlp(p['w2']))
-        
-        if i % 5000 == 0:
-            print(f'Done up to row {i}, saving...')
-            pdf.to_csv('pairwise_similarities.csv')
-    print('Done with pairwise similarities.')
-    pdf.to_csv('pairwise_similarities.csv')   
-
-t= nlp('revolution')[0]
-
-def dump(obj):
-  for attr in dir(obj):
-    if str(attr) in ['vector', 'tensor']:
-        continue
-    print("obj.%s = %r" % (attr, getattr(obj, attr)))
+    
+    
+    
+    
+    
+    

@@ -10,6 +10,10 @@ from enum import Enum
 import pandas as pd
 import itertools
 import time
+from difflib import SequenceMatcher
+from collections import OrderedDict
+import numpy as np 
+
 
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
@@ -33,10 +37,13 @@ class Codenames:
     def __init__(self, first_team = Team.blue, player_team = Team.blue, seed=None):
         
         self.seed = seed
+        if seed is not None:
+            print('SEED: {0}'.format(seed))
         self.current_turn_team = first_team
         
         self.player_team = player_team
         self.other_team = Team.red if player_team == Team.blue else Team.blue
+        self.player_turn_num = 0
         
         self.board = Board(first_team = first_team, seed=self.seed)
         
@@ -54,6 +61,8 @@ class Codenames:
                   
             if self.player_team == self.current_turn_team:
                 
+                self.player_turn_num += 1
+                
                 self.show()     
                 clue = self.bot.play(return_clue=True)
                 max_guesses = len(clue.targets) + 1
@@ -69,14 +78,12 @@ class Codenames:
                               
                     if revealed_card.team != self.player_team:
                         break
-            
-                        
+                                   
             else:
                 self.simulate_turn()
-                     
+                    
             self.change_team()
-       
-            
+                   
          
     def simulate_turn(self, team=Team.red, max_num_to_touch=2):
         valid_words = self.board.get_words(team=team, revealed=False)
@@ -92,16 +99,14 @@ class Codenames:
         while valid_response is None:
             print('Guess {0}/{1}'.format(guess_num, max_guesses))
             print('Enter a card for the below clue.\nEnter _ to pass or $ to display the board again.')
-            response = input(clue)
-            #response = prompt_response(clue)
+            response = input(str(clue) + '\n> ')
             
             if response == '$':
                 self.show()            
             elif response in self.board.get_words(revealed=False) + ['_']:
                 valid_response = response
             else:
-                print(f'''ERROR: {response} is not a valid guess, please enter a word on the board.
-                Enter _ to pass, $ to see the board or ! to quit''')     
+                print(f'''ERROR: {response} is not a valid guess, please enter a word on the board''')     
         return valid_response
       
       
@@ -179,22 +184,18 @@ class Board:
         if seed is not None:
             random.seed(seed)
         
-        selected_card_words = random.sample(all_card_words, 25) 
+        selected_card_words = random.sample(all_card_words, 25)                        
+        teams = (8 * [Team.blue] +  8 * [Team.red] + 7 * [Team.neutral] +
+                 1 * [Team.assassin] + 1 * [first_team])
         
-        team_assignment_seed = str(int(time.time()))[-2:]
-       
-        print('Team assignment seed: {0}'.format(team_assignment_seed))
-        random.seed(team_assignment_seed)
         random.shuffle(selected_card_words)
-        
-        teams = 8 * [Team.blue] +  8 * [Team.red] + 7 * [Team.neutral] + 1 * [Team.assassin] + 1 * [first_team]
         random.shuffle(teams)
         
         self.cards = [Card(word, team) for word, team in zip(selected_card_words, teams)]
         self.max_word_length = max([len(w) for w in selected_card_words])
         
      
-        
+                
     def show(self, reveal_teams=False):
         
         word_display_length = max(12, self.max_word_length + 1)
@@ -228,16 +229,21 @@ class Board:
         card  = self.get_card_by_name(word)
         card.revealed = True           
         return card
-     
-    def get_words(self, team=None, revealed=None):
+    
+    def get_cards(self, team=None, revealed=None):
         relevant_cards = [card for card in self.cards]
         
         if team is not None:
-            relevant_cards = [card for card in relevant_cards if card.team == team]
+            if not isinstance(team, list): team = [team]
+            relevant_cards = [card for card in relevant_cards if card.team in team]
             
         if revealed is not None:
             relevant_cards = [card for card in relevant_cards if card.revealed == revealed]
                     
+        return relevant_cards
+     
+    def get_words(self, team=None, revealed=None):
+        relevant_cards = self.get_cards(team=team, revealed=revealed)
         return [card.word for card in relevant_cards]
     
     def get_card_by_name(self, word):
@@ -268,44 +274,51 @@ class Bot:
     
     def __init__(self, board, owner=None, team=Team.blue):
         
-        #needs master word list to make matrices - but for now just loading from file 
-        #self.potential_clues = [w for w in master_word_list if w not in board.words] #TODO: improve  
-
-        #self.nlp = spacy.load('en_core_web_lg') #is this whats taking so long? 
-
         self.team = team 
         self.board = board #looking only, no touching.
         self.owner = owner #Codenames instance
-        
       
         sim_path = 'cache/card_to_clue_sims_all.csv'
         
         self.board_clue_sims = pd.read_csv(sim_path, index_col=0).loc[self.board.get_words(), :]
         self.board_clue_sims.index.name = 'board_word'
+        #self.remove_clues_similar_to_board_words() #uncomment this 
         
         self.clue_safety = self.set_clue_safety(); #boolean series with same index as board_clue_sims
            
+        self.removed_clues = []
         self.clue_log = []
         
         
-    def remove_clues_similar_to_board_words(self):
-       #board_word_lemmas = [t.lemma_ for t in self.nlp(' '.join(self.board.words))]
-      # columns_to_drop = [c for c in self.board_clue_sims.columns if self.nlp(c)[0].lemma_ in board_word_lemmas]
-      
-      #this now redundant - we lemmatize earlier
-      #columns_to_drop = [c for c in self.board_clue_sims.columns if self.nlp(c)[0].lemma_ in board_word_lemmas]  
-       
-     # self.board_clue_sims = self.board_clue_sims.drop(labels=columns_to_drop, axis=1) 
-     
-     
-     #implement later once we are running with random setups; right now this is handled before saving file 
-     #i could still add rules here that need to be implemented?
-     #idea: no more than 5-6 shared letters?
-     pass
-       
+    def remove_clues_similar_to_board_words(self, substring_len_threshold=5):
+        #current method of removing words that share a substring of len >=5 
+        #mostly catches clues that are fine. Could potentially be improved. 
         
-    def get_valid_targets(self):
-        return [card.word for card in self.board.cards if card.team==self.team and not card.revealed]
+        board_words = list(self.board_clue_sims.index)
+        all_clue_words = list(self.board_clue_sims.columns)
+        
+        clue_words_not_on_board = [c for c in all_clue_words if c not in board_words]
+         
+        def length_longest_match(string1, string2):
+            match = SequenceMatcher(None, string1, string2).find_longest_match(0, len(string1), 0, len(string2))
+            return match.size
+
+        clues_too_similar_to_board_words = []
+        for clue in clue_words_not_on_board:
+            for board_word in board_words:
+                if length_longest_match(clue, board_word) >= substring_len_threshold: 
+                    clues_too_similar_to_board_words.append((clue, board_word))
+                    continue
+        
+        too_similar_clue_words = [c[0] for c in clues_too_similar_to_board_words]
+        good_clue_words = [c for c in clue_words_not_on_board if c not in too_similar_clue_words]
+                  
+        self.board_clue_sims = self.board_clue_sims.loc[:, good_clue_words]
+        self.removed_clues = clues_too_similar_to_board_words
+           
+        
+    #def get_valid_targets(self):
+    #    return [card.word for card in self.board.cards if card.team==self.team and not card.revealed]
     
     def set_clue_safety(self):
              
@@ -328,10 +341,15 @@ class Bot:
         self.clue_safety = ~(danger_df.any(axis=1))
         
           
-    def pick_best_clue_for_targets(self, targets, method='sum'):
+    def pick_best_clue_for_targets(self, unordered_targets, method='sum', is_anti_clue=False):
         #intended to run in apply, hence the weird return 
   
-        relevant_similarities = self.board_clue_sims.loc[targets, self.clue_safety]
+        relevant_similarities = self.board_clue_sims.loc[unordered_targets, :]
+        
+        if is_anti_clue:
+            relevant_similarities = relevant_similarities * -1
+        else:
+            relevant_similarities = relevant_similarities.loc[:, self.clue_safety]
         
         if method == 'sum':
             scores = relevant_similarities.sum()       
@@ -341,29 +359,53 @@ class Bot:
             scores = relevant_similarities.min()
         
         best_clue_word = scores.idxmax()
+        best_clue_df = relevant_similarities[best_clue_word].sort_values(ascending=False)
         
-        return pd.Series([best_clue_word, scores.max(), tuple(relevant_similarities[best_clue_word].values), method])
+        targets = tuple(best_clue_df.index) #now ordered
+        target_sims = tuple(best_clue_df.values)
         
+        return pd.Series([best_clue_word, scores.max(), targets, target_sims, method])
+        
+    def pick_best_anti_clue(self):
+        pass
+        
+    
     def pick_best_clue_for_ntargets(self, ntargets=2, method='sum'):
         
         self.set_clue_safety()
-        target_combos = list(itertools.combinations(self.get_valid_targets(), ntargets))
+        valid_target_words = self.board.get_words(team=Team.blue, revealed=False)
+        target_combos = list(itertools.combinations(valid_target_words, ntargets))
         
-        target_df = pd.DataFrame({'targets': target_combos})
+        target_df = pd.DataFrame({'target_combo': target_combos})
         
-        top_clues_info = target_df['targets'].apply(lambda x: self.pick_best_clue_for_targets(x, method=method))
-        target_df[['clue_word', 'score', 'target_sims', 'method']] = top_clues_info
+        top_clues_info = target_df['target_combo'].apply(lambda x: self.pick_best_clue_for_targets(x, method=method))
+        target_df[['clue_word', 'score', 'targets', 'target_sims', 'method']] = top_clues_info
     
-        best_targets_and_clue = target_df.sort_values('score', ascending=False).iloc[0].to_dict()
-                                
-        return Clue(**best_targets_and_clue)  
+        best_clue_info = (target_df.drop('target_combo', axis=1)
+                          .sort_values('score', ascending=False).iloc[0].to_dict())
+           
+        best_clue_info['sim_df'] = self.make_sim_df(clue_word = best_clue_info['clue_word'])
+        best_clue_info['turn_num'] = self.owner.player_turn_num
+        best_clue_info['clue_chosen'] = False
+        best_clue = Clue(**best_clue_info)
+
+                     
+        return best_clue
+    
+    def make_sim_df(self, clue_word):
+        board_words_and_teams = [(c.word, c.team) for c in self.board.get_cards(revealed=False)]
+        sim_df = (pd.DataFrame(board_words_and_teams, columns=['board_word', 'team'])
+                  .set_index('board_word'))
+        sim_df = sim_df.join(self.board_clue_sims.loc[:, clue_word]).rename({clue_word: 'sim'}, axis=1)
+        return sim_df 
+        
     
 
     def pick_clue(self, ntargets=2, method='maxmin', reveal=False):      
-        clue = self.pick_best_clue_for_ntargets(ntargets=ntargets, method=method)       
+        clue = self.pick_best_clue_for_ntargets(ntargets=ntargets, method=method) 
         self.clue_log.append(clue)     
         return clue
-        
+    
             
     def play(self, return_clue=False, reveal_clue_info=False):
         current_scores = self.owner.scores
@@ -371,16 +413,22 @@ class Bot:
         
         relative_points = current_scores[self.team] - current_scores[other_team]
         num_points_to_win = self.owner.max_scores[self.team] - current_scores[self.team]
-        num_enemy_points_to_win = self.owner.max_scores[other_team] - current_scores[other_team]
-        
+        num_enemy_points_to_win = self.owner.max_scores[other_team] - current_scores[other_team]       
         
         if num_points_to_win <= 2:
             clue = self.pick_clue(ntargets = num_points_to_win)
-        elif relative_points <= -3 or num_enemy_points_to_win <= 2:
+        elif num_enemy_points_to_win <= 2:
+            clue = self.pick_clue(ntargets = min(num_points_to_win, 4))
+        elif relative_points <= -3:
             clue = self.pick_clue(ntargets = min(abs(relative_points), 4))
         else:
-            clue = self.pick_clue(ntargets = 2)
+            #clue = self.pick_clue(ntargets = 2)
+            t2clue = self.pick_clue(ntargets=2)
+            t3clue = self.pick_clue(ntargets=3)
+            clue = self.pick_two_or_three_target_clue(t2clue=t2clue, t3clue=t3clue)
             
+        clue.clue_chosen = True 
+     
         if return_clue:
             return clue
         else:
@@ -388,36 +436,138 @@ class Bot:
                 print(clue.__dict__)
             else:
                 print(clue)
-     
+                
+                
+    def pick_two_or_three_target_clue(self, t2clue, t3clue):
+        t3points = 0 
         
+        if t3clue.closest_unfriendly_word_and_sim[1] < t2clue.closest_unfriendly_word_and_sim[1]:
+            t3points += 1
+        elif t3clue.similarity_ratio > t2clue.similarity_ratio:
+            t3points += 1
+        elif t3clue.target_sims[1] >= t2clue.target_sims[1]: #too permissive?
+            t3points += 1
+            
+        if t3points >= 2:
+            return t3clue
+        else:
+            return t2clue 
+                
+                
+    def guess(self, clue_word, num_targets):
+        #currently this has to be called directly
+        
+        if clue_word not in self.board_clue_sims.columns:
+            return ValueError('Bot is not familiar with the word "{0}"'.format(clue_word))
+        
+        guesses = list(self.board_clue_sims.loc[:, clue_word]
+                   .sort_values(ascending=False)
+                   .head(num_targets)
+                   .index)
+        return guesses
+        
+            
         
 class Clue:
-    def __init__(self, clue_word, targets, score, target_sims, method):
+    #currently eassuming only Blue team has instances of Clue
+    
+    def __init__(self, clue_word, targets, score,
+                 target_sims, method, sim_df = None, turn_num = None, clue_chosen=False):
+        
+        self.team = Team.blue
         self.clue_word = clue_word
         self.targets = targets
         self.score = score
         self.target_sims = target_sims
         self.method = method 
+        self.sim_df = sim_df
+        self.turn_num = turn_num
+        self.clue_chosen = clue_chosen
+
+        
+        self.sim_df['friendly'] = self.sim_df['team'] == self.team
         
         
     def __repr__(self):
-        return str(self.__dict__)
+        d = self.__dict__.copy()
+        del d['sim_df']
+        return str(d)
+    
+    def report(self):
+        d = OrderedDict()
+        d['clue_word'] = self.clue_word
+        d['targets'] = self.targets
+        d['target_sims'] = tuple(s.round(3) for s in self.target_sims)
+        d['score'] = self.score.round(3)
+        d['method'] = self.method
+        d['similarity_ratio'] = self.similarity_ratio.round(3)
+        d['closest_unfriendly'] = self.closest_unfriendly_word_and_sim
+        d['sim_gap']  = self.friendly_unfriendly_sim_gap
+        d['turn_num'] = self.turn_num
+        d['clue_chosen'] = self.clue_chosen
+        
+        for k in d:
+            print('{0}: {1}'.format(k, d[k]))
+        
     
     def __str__(self):
-        return 'CLUE: {0}, {1}\n> '.format(self.clue_word, len(self.targets))
+        return 'CLUE: {0}, {1}'.format(self.clue_word, len(self.targets))
+    
+    @property
+    def similarity_ratio(self):
+        thresh = 0.15
+        friendly_score = self.sim_df.query('friendly & (sim > @thresh)')['sim'].sum()
+        unfriendly_score = self.sim_df.query('not friendly & (sim > @thresh)')['sim'].sum()
         
-
+        if unfriendly_score == 0:
+            return np.Inf
+        else:
+            return friendly_score / unfriendly_score
+       
+    @property         
+    def closest_unfriendly_word_and_sim(self):
+        return list(self.sim_df.query('team != @self.team')['sim']
+                .nlargest(1).round(3).items())[0]
+             
+    @property
+    def friendly_unfriendly_sim_gap(self):
+        return self.target_sims[-1] - self.closest_unfriendly_word_and_sim[1]
+        
         
 if __name__ == "__main__":
+    
+    seed = str(int(time.time()))[-4:]
+    #seed = 7577 #good first clue
+    
+    cn = Codenames(seed = seed)  
+    b = cn.bot 
+    
+    if False:
 
-    cn = Codenames(seed = str(int(time.time()))[-4:])  
+        #cn.show()
+        #b.play()
+        cn.play()
+        
+        print('\n')
+        for c in b.clue_log:
+            c.report()
+            print('\n')
+            
+            
+    df = b.board_clue_sims
     
-    b = cn.bot
+    #nlp = spacy.load('en_core_web_lg')
+
+    #c2 = b.pick_clue(ntargets=2)
+    #c3 = b.pick_clue(ntargets=3)
     
-    cn.play()
+    #c2.report()
     
+   # print(clue2.__repr__())
+    #print(clue3.__repr__())
     
-    
+    #cn.play()
+
     #b.clue()
     
     #for ntargets in range(2,5):
@@ -429,8 +579,4 @@ if __name__ == "__main__":
     
    
 
-    
-    
-    
-    
     
