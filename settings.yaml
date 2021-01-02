@@ -1,0 +1,5 @@
+paths:
+    home: 'C:\Users\noahn\Documents\MiscProgramming\codenamesBot'
+    raw_resources: 'raw_resources'
+    cache: 'cache'
+    logs: 'logs'
